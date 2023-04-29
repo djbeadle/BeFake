@@ -9,9 +9,16 @@ import random
 from .BeFake import BeFake
 from .models.post import Post, Location
 
+import sqlite3
+import requests
+
 import click
 
 DATA_DIR = "data"
+
+
+db = sqlite3.connect('/Users/djbeadle/Developer/BeRealScraper/bereal.db')
+cur = db.cursor()
 
 
 def load_bf(func):
@@ -136,15 +143,73 @@ def feed(bf, feed_id, save_location, realmoji_location, instant_realmoji_locatio
         else:
             click.echo(f"saving post by {item.user.username}".ljust(50, " ") + item.id)
             post_date = item.creation_date.format(date_format)
-            _save_location = save_location.format(user=item.user.username, date=post_date, feed_id=feed_id,
-                                                  post_id=item.id)
+            _save_location = save_location.format(user=item.user.username, date=post_date, feed_id=feed_id, post_id=item.id)
+
+            # Daniel Database stuff
+        
+            id = item.id
+            uname = item.username
+            ownerId = item.owner_id
+            notificationID = item.notification_id
+            takenAt = item.data_dict['creationDate']['_seconds']
+            lat, long = item.data_dict.get("location", {}).get("_latitude", ""), item.data_dict.get("location", {}).get("_longitude", "")
+            
+            cur.execute("SELECT * FROM posts WHERE ownerID = ? AND notificationID = ?", (ownerId, notificationID))
+            if cur.fetchone():
+                cur.execute("""
+                    UPDATE posts SET allJson = ? WHERE id = ?
+                """, (json.dumps(item.data_dict), id))
+                db.commit()
+            else:
+                photoURL = item.primary_photo.url
+                secondaryPhotoURL = item.secondary_photo.url
+
+                x = 0
+                photo_raw = ""
+                while x < 3:
+                    photo_raw = requests.get(photoURL)
+                    if photo_raw.ok:
+                        break
+                    x+=1
+            
+                y = 0
+                secondaryPhoto_raw = ""
+                while y < 3:
+                    secondaryPhoto_raw = requests.get(secondaryPhotoURL)
+                    if secondaryPhoto_raw.ok:
+                        break
+                    print("_")
+                    y+=1
+
+                cur.execute("""
+                    INSERT INTO posts (id, username, ownerID, notificationID, takenAt, allJson, photo, secondaryPhoto)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                """, (id, uname, ownerId, notificationID, takenAt, json.dumps(item.data_dict), photo_raw.content, secondaryPhoto_raw.content))
+
+                db.commit()
+            # RealMoji 
+            for rm in item.realmojis:
+                print(f'  {rm.emoji} {rm.username}')
+                cur.execute("SELECT * FROM realMojis WHERE id = ?;", (rm.id, ))
+                
+                if cur.fetchone():
+                    continue
+
+                photo_raw = requests.get(rm.photo.url)
+                cur.execute("""
+                    INSERT INTO realMojis (username, date, id, emoji, photo, allJson)
+                    VALUES (?, ?, ?, ?, ?, ?);
+                """, (rm.username, rm.get_creation_date().int_timestamp, rm.id, rm.emoji, photo_raw.content, json.dumps({ "_info": "Daniel intentionatlly left this blank"})
+                ))
+            db.commit()
+
 
         os.makedirs(f"{_save_location}", exist_ok=True)
 
         with open(f"{_save_location}/info.json", "w+") as f:
             f.write(json.dumps(item.data_dict, indent=4))
-        item.primary_photo.download(f"{_save_location}/primary")
-        item.secondary_photo.download(f"{_save_location}/secondary")
+        # item.primary_photo.download(f"{_save_location}/primary")
+        # item.secondary_photo.download(f"{_save_location}/secondary")
 
         if feed_id == "memories":
             continue
@@ -163,7 +228,7 @@ def feed(bf, feed_id, save_location, realmoji_location, instant_realmoji_locatio
                 _realmoji_location = _realmoji_location.format(date=emoji.get_creation_date().format(date_format))
 
             os.makedirs(os.path.dirname(_realmoji_location), exist_ok=True)
-            emoji.photo.download(f"{_realmoji_location}")
+            # emoji.photo.download(f"{_realmoji_location}")
 
 
 @cli.command(help="Download friends information")
